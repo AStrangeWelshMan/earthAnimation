@@ -1,0 +1,315 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+<title> UP815458 WebGl </title>
+<meta charset="utf-8">
+<script type="text/javascript" src="glLib/webgl-debug.js"></script>
+<script type="text/javascript" src="glLib/glMatrix.js"></script>
+<script type="text/javascript" src="glLib/webgl-utils.js"></script>
+
+
+
+<script id="shader-vs" type="x-shader/x-vertex">
+attribute vec3 aVertexPosition;
+attribute vec3 aVertexNormal;
+attribute vec2 aTextureCoordinates;
+
+uniform mat4 uMVMatrix;
+uniform mat4 uPMatrix;
+uniform mat3 uNMatrix;
+
+varying vec2 vTextureCoordinates;
+varying vec3 vNormalEye;
+varying vec3 vPositionEye3;
+
+void main() {
+  // Get vertex position in eye coordinates and send to the fragment
+  // shader
+  vec4 vertexPositionEye4 = uMVMatrix * vec4(aVertexPosition, 1.0);
+  vPositionEye3 = vertexPositionEye4.xyz / vertexPositionEye4.w;
+
+  // Transform the normal to eye coordinates and send to fragment shader
+  vNormalEye = normalize(uNMatrix * aVertexNormal);
+
+  // Transform the geometry
+  gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+  vTextureCoordinates = aTextureCoordinates;
+}
+</script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+precision mediump float;
+
+varying vec2 vTextureCoordinates;
+varying vec3 vNormalEye;
+varying vec3 vPositionEye3;
+
+uniform vec3 uAmbientLightColor;
+uniform vec3 uDiffuseLightColor;
+uniform vec3 uSpecularLightColor;
+uniform vec3 uLightPosition;
+uniform vec3 uSpotDirection;
+uniform sampler2D uSampler;
+
+const float shininess = 32.0;
+const float spotExponent = 40.0;
+// cutoff angle of spot light
+const float spotCosCutoff = 0.97; // corresponds to 14 degrees
+
+vec3 lightWeighting = vec3(0.0, 0.0, 0.0);
+
+void main() {
+  // Calculate the vector (L) to the light source.
+  vec3 vectorToLightSource = normalize(uLightPosition - vPositionEye3);
+
+  // Calculate N dot L for diffuse lighting
+  float diffuseLightWeighting = max(dot(vNormalEye, vectorToLightSource), 0.0);
+
+  // We only do spot and specular light calculations if we
+  // have diffuse light term.
+  if (diffuseLightWeighting > 0.0) {
+
+	// Calculate the intensity of spot light in the direction of
+      // vectorToLightSource.
+      float spotEffect = dot(normalize(uSpotDirection),	normalize(-vectorToLightSource));
+
+      // Check that we are inside the spot light cone
+	if (spotEffect > spotCosCutoff) {
+		spotEffect = pow(spotEffect, spotExponent);
+
+		// Calculate the reflection vector (R) needed for specular
+		// light
+		vec3 reflectionVector = normalize(reflect(-
+			vectorToLightSource,vNormalEye));
+
+		// Calculate view vector (V) in eye coordinates as
+		// (0.0, 0.0, 0.0) - vPositionEye3
+		vec3 viewVectorEye = -normalize(vPositionEye3);
+		float rdotv = max(dot(reflectionVector, viewVectorEye), 0.0);
+		float specularLightWeighting = pow(rdotv, shininess);
+		lightWeighting =
+		    spotEffect * uDiffuseLightColor * diffuseLightWeighting +
+		    spotEffect * uSpecularLightColor * specularLightWeighting;
+	}
+}
+
+  // Always add the ambient light
+  lightWeighting += uAmbientLightColor;
+
+  vec4 texelColor = texture2D(uSampler, vTextureCoordinates);
+
+  // modulate texel color with lightweigthing and write as final color
+  gl_FragColor = vec4(lightWeighting.rgb * texelColor.rgb, texelColor.a);
+}
+
+</script>
+
+<!-- Initialize -->
+
+<script type="text/javascript" src="js/initialize.js"></script>
+
+<!-- Texture functions -->
+
+<script type="text/javascript" src="js/textureFunctions.js"></script>
+
+<!-- Import User input -->
+
+<script type="text/javascript" src="js/userInput.js"></script>
+
+<!-- Lighting functions -->
+
+<script type="text/javascript" src="js/lighting.js"></script>
+
+<!-- ______SHAPE FUNCTIONS______ -->
+
+<!-- import cube functions -->
+
+<script type="text/javascript" src="js/shapes/primitives/cube.js"></script>
+
+<!-- Import sphere functions -->
+
+<script type="text/javascript" src="js/shapes/primitives/sphere.js"></script>
+
+<!-- Import satellite functions -->
+
+<script type="text/javascript" src="js/shapes/complex/satellite.js"></script>
+<script type="text/javascript" src="js/shapes/primitives/dish.js"></script>
+
+<script type="text/javascript">
+
+  function setupBuffers() {
+    setupCubeBuffers();
+    setupSphereBuffers();
+    setupDishBuffers();
+  }
+
+  function init() {
+    // Initialization that is performed during first startup and when the
+    // event webglcontextrestored is received is included in this function.
+    setupShaders();
+    setupBuffers();
+    setupLights();
+    setupTextures();
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    gl.enable(gl.DEPTH_TEST);
+
+    // Initialize some varibles for the moving box
+    pwgl.x = 0.0;
+    pwgl.y = 0.0;
+    pwgl.z = 0.0;
+    pwgl.orbitRadius = 25.0;
+
+    // defines an initial start period for controling the speed of the satellites orbit
+    pwgl.orbitSpeed = 2000;
+
+    pwgl.satelliteAngle = 0;
+
+    // earth Rotational orbit speed
+    pwgl.earthRotationSpeed = 30000;
+
+    // Initialize some variables related to the animation
+    pwgl.animationStartTime = undefined;
+    pwgl.nbrOfFramesForFPS = 0;
+    pwgl.previousFrameTimeStamp = Date.now();
+
+    mat4.perspective(60, gl.viewportWidth / gl.viewportHeight, 1, 100.0, pwgl.projectionMatrix);
+    mat4.identity(pwgl.modelViewMatrix);
+    //camera viewpoints
+    mat4.lookAt([30, 30, 30], [0, 0, 0], [0, 1, 0], pwgl.modelViewMatrix); // defualt view
+    //mat4.lookAt([8, 12, 8],[0, 0, 0], [0, 1,0], pwgl.modelViewMatrix);
+  }
+
+  function draw() {
+    pwgl.requestId = requestAnimFrame(draw);
+
+    var currentTime = Date.now();
+
+    handlePressedDownKeys();
+
+    // Update FPS if a second or more has passed since last FPS update
+    if(currentTime - pwgl.previousFrameTimeStamp >= 1000) {
+      pwgl.fpsCounter.innerHTML = pwgl.nbrOfFramesForFPS;
+      pwgl.nbrOfFramesForFPS = 0;
+      pwgl.previousFrameTimeStamp = currentTime;
+    }
+    pwgl.orbitRadiusCounter.innerHTML = pwgl.orbitRadius;
+    pwgl.orbitSpeedCounter.innerHTML = pwgl.orbitSpeed;
+
+    //console.log("1   xRot= "+xRot+"    yRot="+yRot+"  t= "+transl);
+    mat4.translate(pwgl.modelViewMatrix, [transX, transY, transZ], pwgl.modelViewMatrix);
+    mat4.rotateX(pwgl.modelViewMatrix, xRot/50, pwgl.modelViewMatrix);
+    mat4.rotateY(pwgl.modelViewMatrix, yRot/50, pwgl.modelViewMatrix);
+    mat4.rotateZ(pwgl.modelViewMatrix, yRot/50, pwgl.modelViewMatrix);
+    yRot = xRot = zRot = transX = transY = transZ = 0;
+
+    uploadModelViewMatrixToShader();
+    uploadProjectionMatrixToShader();
+    uploadNormalMatrixToShader();
+    gl.uniform1i(pwgl.uniformSamplerLoc, 0);
+
+    gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Draw Sphere
+    pushModelViewMatrix();
+
+    //animation code for rotating the earth
+    if (currentTime == undefined) {
+      currentTime = Date.now();
+    }
+    if (pwgl.animationStartTime == undefined) {
+      pwgl.animationStartTime = currentTime
+    }
+
+    pwgl.earthAngle = (currentTime - pwgl.animationStartTime)/
+    pwgl.earthRotationSpeed*2*Math.PI % (2*Math.PI);
+
+    mat4.rotateY(pwgl.modelViewMatrix, -pwgl.earthAngle, pwgl.modelViewMatrix)
+
+    // mat4.scale(pwgl.modelViewMatrix, [3.0, 3.0, 3.0], pwgl.modelViewMatrix); // only used for viewing the satellite instead of the sphere
+
+    uploadModelViewMatrixToShader();
+    uploadNormalMatrixToShader();
+    drawSphere(pwgl.earthTexture);
+    // drawSatellite(); //-- to be used as a close up for the purposes of checking each new shape during experimentation
+    popModelViewMatrix();
+
+    // Calculate the position for the satellite
+    pushModelViewMatrix();
+    if (currentTime === undefined) {
+      currentTime = Date.now();
+    }
+
+    if (pwgl.animationStartTime === undefined) {
+      pwgl.animationStartTime = currentTime;
+    }
+
+    // Update the position of the satellite
+    // the orbit speed will be controlled by replacing the period time in the calculation below
+    pwgl.satelliteAngle = (currentTime - pwgl.animationStartTime)/pwgl.orbitSpeed*2*Math.PI % (2*Math.PI);
+    pwgl.x = Math.cos(pwgl.satelliteAngle) * pwgl.orbitRadius;
+    pwgl.z = Math.sin(pwgl.satelliteAngle) * pwgl.orbitRadius;
+
+
+    mat4.translate(pwgl.modelViewMatrix, [pwgl.x, pwgl.y, pwgl.z], pwgl.modelViewMatrix);
+    mat4.rotateY(pwgl.modelViewMatrix, -pwgl.satelliteAngle, pwgl.modelViewMatrix);
+
+    uploadModelViewMatrixToShader();
+    uploadNormalMatrixToShader();
+    drawSatellite(pwgl.mainSatTexture);
+    popModelViewMatrix();
+
+    // Update number of drawn frames to be able to count fps
+    pwgl.nbrOfFramesForFPS++;
+  }
+
+  function startup() {
+    canvas = document.getElementById("myGLCanvas");
+    canvas = WebGLDebugUtils.makeLostContextSimulatingCanvas(canvas);
+    canvas.addEventListener('webglcontextlost', handleContextLost, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
+    document.addEventListener('keydown', handleKeyDown, false);
+    document.addEventListener('keyup', handleKeyUp, false);
+    canvas.addEventListener('mousemove', mymousemove, false);
+    canvas.addEventListener('mousedown', mymousedown, false);
+    canvas.addEventListener('mouseup', mymouseup, false);
+    canvas.addEventListener('mousewheel', wheelHandler, false);
+    canvas.addEventListener('DOMMouseScroll', wheelHandler, false);
+
+    gl = createGLContext(canvas);
+
+    init();
+
+    pwgl.fpsCounter = document.getElementById("fps");
+    pwgl.orbitRadiusCounter = document.getElementById("orbitRadiusCounter");
+    pwgl.orbitSpeedCounter = document.getElementById("orbitSpeedCounter");
+
+    // Draw the complete scene
+    draw();
+  }
+
+</script>
+
+</head>
+<body onload="startup();">
+<canvas id="myGLCanvas" width="700" height="700"></canvas>
+<div id="fps-counter"> FPS: <span id="fps">--</span></div><br />
+Orbit Radius:<div id="orbitRadiusCounter"><span id="orbitRadius">--</span></div><br />
+Satellite Orbit Period:<div id="orbitSpeedCounter"><span id="orbitSpeed">--</span></div>
+<p>-----Control Instructions-----<br />
+  ---Orbit Controls---<br />
+  Use the left and right arrow keys to increase(right) or decrease(left) the orbit radius of the satellite<br />
+  Use the up and down arrow keys to increase(up) or decrease(down) the speed of the orbit<br />
+  <br />
+  ---Viewport Controls---<br />
+  --Translation Controls--<br />
+  Hold Shift and click-drag to translate along the x-axis<br />
+  Hold Alt and click-drag to translate along the y-axis<br />
+  Use the mouse wheel to translate along the z-axis<br />
+  <br />
+  --Rotation controls--<br />
+  click-drag to rotate the scene via the x and y axis<br />
+  <br />
+  </p>
+</body>
+</html>
