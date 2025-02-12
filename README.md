@@ -1,5 +1,5 @@
 # earthAnimation
-A WebGL animation I made as part of my Advanced Graphics And Computer Vision unit
+A WebGL animation I made as part of my Advanced Graphics And Computer Vision unit in university
 
 ## Instructions for opening
 Due to default settings on certain browsers (namely chrome, opera and firefox), the textures will not load when running from a local folder (I can confirm that it works perfectly fine when hosted on a virtual server).
